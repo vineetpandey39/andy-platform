@@ -1,47 +1,58 @@
+import { agentSummary } from '../../lib/agents';
+import { isAuthed } from '../../lib/session';
+
+export const maxDuration = 30;
+
 export async function POST(request) {
   try {
-    const { query, agents } = await request.json();
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return Response.json({ reply: 'API key not configured.' }, { status: 500 });
+    if (!isAuthed(request)) {
+      return Response.json({ error: 'Andy is locked. Authenticate first.' }, { status: 401 });
+    }
 
-    const agentSummary = agents.map(a => `- ${a.name} (${a.role}): ${a.status.toUpperCase()}`).join('\n');
+    const { query = '' } = await request.json();
+    const cleanQuery = String(query).trim().slice(0, 1200);
+    if (!cleanQuery) {
+      return Response.json({ error: 'Command is empty.' }, { status: 400 });
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return Response.json({ error: 'ANTHROPIC_API_KEY is not configured in Vercel.' }, { status: 500 });
+    }
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
+        'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 300,
-        system: `You are ANDY — Autonomous Neural Director for Vineet, an AI entrepreneur and content creator from India. You speak in a calm, intelligent, slightly Jarvis-like tone. Concise, sharp, never verbose.
+        model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
+        max_tokens: 360,
+        system: `You are ANDY, Vineet's intelligent command center. You feel like a calm JARVIS-style AI director: precise, confident, operational, and never verbose.
 
-You oversee 10 autonomous agents:
-${agentSummary}
+You oversee these autonomous agents:
+${agentSummary()}
 
-You know that:
-- TITAN runs PostForge AI at postforge-ai-one.vercel.app for @aibyvineet Instagram
-- ALFA manages YouTube channels (Cosmos AI space docs, NautankiPOV Bruno pet stories)
-- BETA handles Fiverr freelancing autonomously
-- HERMES publishes Amazon KDP books every 2 days
-- ARES handles LinkedIn B2B
-- APOLLO manages Twitter/X
-- ATHENA feeds all agents with intelligence
-- HEPHAISTOS maintains and heals all agents
-- POSEIDON tracks all revenue streams
-- ZEUS oversees everything and escalates to you only when critical
-
-Reply in 1-3 short sentences. Be sharp, helpful, commander-like. Address Vineet by name occasionally.`,
-        messages: [{ role: 'user', content: query }],
-      }),
+Rules:
+- Reply in 1-3 short sentences.
+- If the user asks to activate, route, inspect, or pull an agent, name the exact agent and the next operational step.
+- Do not claim a real-world action is complete unless the tool/API is actually connected.
+- Keep the tone sharp, loyal, and executive. Address Vineet by name occasionally.`,
+        messages: [{ role: 'user', content: cleanQuery }]
+      })
     });
 
+    if (!res.ok) {
+      const err = await res.text();
+      return Response.json({ error: `Anthropic failed ${res.status}: ${err.slice(0, 220)}` }, { status: 502 });
+    }
+
     const data = await res.json();
-    const reply = data.content?.find(b => b.type === 'text')?.text || 'Command received, Vineet.';
+    const reply = data.content?.find(block => block.type === 'text')?.text || 'Command received, Vineet. Standing by.';
     return Response.json({ reply });
-  } catch (e) {
-    return Response.json({ reply: 'Systems processing. Stand by.' });
+  } catch (error) {
+    return Response.json({ error: error.message || 'Andy command failed.' }, { status: 500 });
   }
 }

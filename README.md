@@ -1,44 +1,57 @@
-# 🤖 ANDY — Autonomous Neural Director for You
+# ANDY Platform
 
-Your personal AI empire command center. Voice-activated. Codeword-protected. 10 autonomous agents running 24/7.
+ANDY is a JARVIS-style command cockpit for Vineet's autonomous agent network.
 
-## 🏛️ The 10 Agents
+## Agents
 
-| Agent | Role | Status |
-|-------|------|--------|
-| ⚡ TITAN | Instagram / PostForge AI | LIVE |
-| 🎬 ALFA | YouTube (Cosmos AI + NautankiPOV) | Building |
-| 💼 BETA | Fiverr Freelancing | Planned |
-| 📚 HERMES | Amazon KDP Publishing | Planned |
-| 🎯 ARES | LinkedIn B2B | Planned |
-| ✨ APOLLO | Twitter/X | Planned |
-| 🔮 ATHENA | Intelligence & Research | Planned |
-| 🔧 HEPHAISTOS | System Maintenance | Planned |
-| 💰 POSEIDON | Revenue & Finance | Planned |
-| 👑 ZEUS | Master Overseer | Planned |
+- TITAN: Instagram and PostForge AI
+- ALFA: YouTube content engine
+- BETA: Freelance operator
+- HERMES: KDP publisher
+- ARES: LinkedIn B2B engine
+- APOLLO: X growth engine
+- ATHENA: Intelligence layer
+- HEPHAISTOS: System maintenance
+- POSEIDON: Revenue control
+- ZEUS: Master overseer
 
-## 🚀 Deploy to Vercel
+## Vercel Environment Variables
 
-1. Push this repo to GitHub
-2. Connect to Vercel
-3. Add environment variables from `.env.example`
-4. Deploy — Andy is live
+Required:
 
-## 🎙️ Voice Activation
+```bash
+ANTHROPIC_API_KEY=your_key
+```
 
-- Click the orb to speak
-- Andy responds via Web Speech API (built-in Chrome TTS)
-- Codeword: `andy activate` (change in production)
+Recommended:
 
-## 🔗 n8n Integration
+```bash
+ANTHROPIC_MODEL=claude-sonnet-4-6
+ANDY_CODEWORD=andy activate
+ANDY_SESSION_SECRET=use_a_long_random_secret
+ANDY_WEBHOOK_SECRET=use_a_long_random_secret
+```
 
-Andy has a webhook endpoint at `/api/webhook` that n8n agents ping to report activity.
+## Voice Input
+
+Voice recognition uses the browser Web Speech API. Use Chrome on HTTPS, then allow microphone permission from the browser address bar.
+
+## Webhook
+
+n8n agents can report events to:
+
+```bash
+POST /api/webhook
+Authorization: Bearer $ANDY_WEBHOOK_SECRET
+Content-Type: application/json
+```
+
+Example body:
 
 ```json
-POST /api/webhook
 {
   "agent": "titan",
-  "event": "post_published", 
+  "event": "post_published",
   "data": { "posts": 1, "reach": 450 }
 }
 ```
