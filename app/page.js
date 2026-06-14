@@ -22,6 +22,13 @@ const TITAN_PILLAR_LABELS = {
   transformation: 'AI Transformation',
   automation: 'AI Automation Win'
 };
+const TITAN_JOB_STEPS = [
+  { id: 'refresh', label: 'Refresh sources' },
+  { id: 'select', label: 'Select latest' },
+  { id: 'generate', label: 'Generate plan' },
+  { id: 'images', label: 'Create images' },
+  { id: 'publish', label: 'Publish' }
+];
 
 function statusLabel(status) {
   if (status === 'active') return 'LIVE';
@@ -50,7 +57,7 @@ export default function Andy() {
   const [command, setCommand] = useState('');
   const [reply, setReply] = useState('Authenticate and I will bring the agent network online.');
   const [loading, setLoading] = useState(false);
-  const [agentRunning, setAgentRunning] = useState('');
+  const [jobs, setJobs] = useState([]);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState('OpenAI voice channel idle. Tap the core or Record voice.');
@@ -61,6 +68,8 @@ export default function Andy() {
 
   const activeAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'active').length, []);
   const buildingAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'building').length, []);
+  const runningJob = useMemo(() => jobs.find(job => job.status === 'running' || job.status === 'queued'), [jobs]);
+  const runningAgentId = runningJob?.agentId || '';
 
   function isTitanAutomationCommand(text) {
     const clean = String(text || '').toLowerCase();
@@ -94,6 +103,23 @@ export default function Andy() {
     }
     check();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem('andy_agent_jobs');
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) setJobs(parsed.slice(0, 8));
+    } catch {
+      window.localStorage.removeItem('andy_agent_jobs');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('andy_agent_jobs', JSON.stringify(jobs.slice(0, 8)));
+  }, [jobs]);
 
   const speak = useCallback(async (text) => {
     const clean = String(text || '').trim();
@@ -170,7 +196,8 @@ export default function Andy() {
 
     try {
       if (isTitanAutomationCommand(clean)) {
-        await runTitan(clean);
+        enqueueAgentJob('titan', clean);
+        setLoading(false);
         return;
       }
 
@@ -198,43 +225,102 @@ export default function Andy() {
     }
   }
 
-  async function runTitan(cleanCommand) {
-    const titan = AGENTS.find(agent => agent.id === 'titan');
+  function updateJob(nextJob) {
+    setJobs(prev => prev.map(job => job.id === nextJob.id ? nextJob : job));
+  }
+
+  function enqueueAgentJob(agentId, cleanCommand) {
+    const agent = AGENTS.find(item => item.id === agentId);
+    if (!agent) {
+      setReply(`No agent found for ${agentId}.`);
+      return;
+    }
+
     const pillar = nextTitanPillar();
-    setSelectedAgent(titan || AGENTS[0]);
+    const job = {
+      id: `${agentId}-${Date.now()}`,
+      agentId,
+      agentName: agent.name,
+      command: cleanCommand,
+      pillar,
+      pillarFull: TITAN_PILLAR_LABELS[pillar],
+      format: 'Carousel',
+      status: 'queued',
+      currentStep: 0,
+      progress: 0,
+      steps: agentId === 'titan' ? TITAN_JOB_STEPS : [],
+      data: {},
+      log: [{ at: new Date().toISOString(), message: `${agent.name} queued from command: ${cleanCommand}` }],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    setJobs(prev => [job, ...prev].slice(0, 8));
+    setSelectedAgent(agent);
     setActiveTab('command');
-    setAgentRunning('titan');
-    setReply(`Titan is live, Vineet. Running ${TITAN_PILLAR_LABELS[pillar]} in PostForge: refresh, pick latest verified source, generate plan, create images, and publish to Instagram.`);
-    setVoiceStatus(`Titan running ${TITAN_PILLAR_LABELS[pillar]} through PostForge...`);
+    setReply(`${agent.name} job queued, Vineet. I will execute it step-by-step and keep the queue status visible.`);
+    setVoiceStatus(`${agent.name} queued. Polling the executor step-by-step...`);
+    void processAgentJob(job);
+  }
 
+  async function processAgentJob(initialJob) {
+    let currentJob = { ...initialJob, status: 'running' };
+    updateJob(currentJob);
     try {
-      const res = await fetch('/api/agents/titan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cleanCommand, pillar, format: 'Carousel' })
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || 'Titan failed.');
+      while (currentJob.status === 'queued' || currentJob.status === 'running') {
+        const stepLabel = currentJob.steps?.[currentJob.currentStep]?.label || 'Next step';
+        setVoiceStatus(`${currentJob.agentName} executing: ${stepLabel}...`);
 
-      advanceTitanPillar();
-      const nextPillar = nextTitanPillar();
-      const message = [
-        `Titan completed ${data.pillar?.full || TITAN_PILLAR_LABELS[pillar]}.`,
-        `Source: ${data.source?.headline || 'latest verified item'}.`,
-        data.instagram?.permalink ? `Published: ${data.instagram.permalink}` : `Published media ID: ${data.instagram?.id || 'created'}.`,
-        `Next Titan run will use ${TITAN_PILLAR_LABELS[nextPillar]}.`
-      ].join(' ');
-      setReply(message);
-      await speak(message);
+        const res = await fetch('/api/jobs/step', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job: currentJob })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'Job step failed.');
+        currentJob = data.job;
+        updateJob(currentJob);
+
+        if (currentJob.status === 'completed' || currentJob.status === 'failed') break;
+        await new Promise(resolve => setTimeout(resolve, 900));
+      }
+
+      if (currentJob.status === 'completed') {
+        if (currentJob.agentId === 'titan') advanceTitanPillar();
+        const nextPillar = nextTitanPillar();
+        const result = currentJob.result || {};
+        const sourceHeadline = result.source?.headline || currentJob.summary || 'latest verified source';
+        const message = [
+          `${currentJob.agentName} completed ${currentJob.pillarFull || 'the job'}.`,
+          `Source: ${sourceHeadline}.`,
+          result.permalink ? `Published: ${result.permalink}.` : result.mediaId ? `Published media ID: ${result.mediaId}.` : '',
+          currentJob.agentId === 'titan' ? `Next Titan run: ${TITAN_PILLAR_LABELS[nextPillar]}.` : ''
+        ].filter(Boolean).join(' ');
+        setReply(message);
+        await speak(message);
+      } else {
+        throw new Error(currentJob.error || `${currentJob.agentName} job failed.`);
+      }
     } catch (error) {
-      const message = `Titan stopped: ${error.message || 'automation failed'}`;
+      const failed = {
+        ...currentJob,
+        status: 'failed',
+        error: error.message || 'Job failed.',
+        updatedAt: new Date().toISOString(),
+        log: [...(currentJob.log || []), { at: new Date().toISOString(), message: `Failed: ${error.message || 'Job failed.'}` }]
+      };
+      updateJob(failed);
+      const message = `${failed.agentName || 'Agent'} stopped: ${failed.error}`;
       setReply(message);
       await speak(message);
     } finally {
-      setAgentRunning('');
       setLoading(false);
       setVoiceStatus('OpenAI voice channel idle. Tap the core or Record voice.');
     }
+  }
+
+  function clearCompletedJobs() {
+    setJobs(prev => prev.filter(job => job.status === 'running' || job.status === 'queued'));
   }
 
   async function startVoice() {
@@ -439,13 +525,48 @@ export default function Andy() {
                     {selectedAgent.tasks.map(task => (
                       <div key={task}>
                         <span>{task}</span>
-                        <strong>{agentRunning === selectedAgent.id ? 'EXECUTING' : selectedAgent.status === 'active' ? 'RUNNING' : 'READY'}</strong>
+                        <strong>{runningAgentId === selectedAgent.id ? 'EXECUTING' : selectedAgent.status === 'active' ? 'RUNNING' : 'READY'}</strong>
                       </div>
                     ))}
                   </div>
                   {selectedAgent.url && <p><a href={selectedAgent.url} target="_blank" rel="noreferrer">Open {selectedAgent.name}</a></p>}
                 </div>
               )}
+
+              <div className="queue-panel">
+                <div className="queue-head">
+                  <div>
+                    <div className="panel-label">Agent queue</div>
+                    <strong>{jobs.length ? `${jobs.length} job${jobs.length === 1 ? '' : 's'}` : 'No jobs queued'}</strong>
+                  </div>
+                  {jobs.some(job => job.status === 'completed' || job.status === 'failed') && (
+                    <button className="ghost-btn compact" onClick={clearCompletedJobs}>Clear done</button>
+                  )}
+                </div>
+                <div className="queue-list">
+                  {jobs.length === 0 && <p className="muted">Say “activate Titan” to create the first autonomous job.</p>}
+                  {jobs.map(job => {
+                    const step = job.steps?.[job.currentStep]?.label || (job.status === 'completed' ? 'Complete' : 'Waiting');
+                    return (
+                      <article className={`queue-job ${job.status}`} key={job.id}>
+                        <div className="queue-job-top">
+                          <strong>{job.agentName}</strong>
+                          <span>{job.status}</span>
+                        </div>
+                        <p>{job.pillarFull || job.command}</p>
+                        <div className="progress-track">
+                          <span style={{ width: `${job.progress || 0}%` }} />
+                        </div>
+                        <small>{job.status === 'completed' ? 'Completed' : job.status === 'failed' ? job.error : step}</small>
+                        {job.log?.slice(-3).map(entry => (
+                          <em key={`${job.id}-${entry.at}`}>{entry.message}</em>
+                        ))}
+                        {job.result?.permalink && <a href={job.result.permalink} target="_blank" rel="noreferrer">Open post</a>}
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
             </aside>
           </section>
         )}

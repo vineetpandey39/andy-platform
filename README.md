@@ -43,7 +43,7 @@ Voice commands use browser microphone recording plus server-side OpenAI transcri
 
 ## Titan Automation
 
-Commands such as `activate Titan`, `run Titan`, or `post with Titan` trigger the PostForge workflow from ANDY. Titan rotates through News, Tools, Income, Transform, and Automation, then calls PostForge to refresh verified sources, select the latest item, generate a carousel plan, create carousel images, and publish to Instagram.
+Commands such as `activate Titan`, `run Titan`, or `post with Titan` create an Agent Queue job in ANDY. The job is executed step-by-step with polling so Vercel does not need one long request. Titan rotates through News, Tools, Income, Transform, and Automation, then calls PostForge to refresh verified sources, select the latest item, generate a carousel plan, create carousel images, and publish to Instagram.
 
 ## Webhook
 
