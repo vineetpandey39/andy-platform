@@ -96,6 +96,17 @@ function canonicalSteps(job) {
   return Array.isArray(job.steps) ? job.steps : [];
 }
 
+function compactImage(image) {
+  return {
+    index: image.index,
+    label: image.label,
+    success: Boolean(image.success),
+    imageUrl: image.imageUrl || '',
+    error: image.error || '',
+    uploadError: image.uploadError || ''
+  };
+}
+
 async function runTitanStep(job) {
   const activePillar = normalizePillar(job.pillar);
   const step = TITAN_STEPS[Number(job.currentStep || 0)];
@@ -118,10 +129,11 @@ async function runTitanStep(job) {
   if (step.id === 'select') {
     const latest = latestFirst(job.data?.refresh?.items || [])[0];
     if (!latest) throw new Error(`No verified ${activePillar.full} source found.`);
+    const { refresh: _discardRefresh, ...safeData } = job.data || {};
 
     return completeStep({
       ...job,
-      data: { ...(job.data || {}), selectedItems: [latest] },
+      data: { ...safeData, selectedItems: [latest] },
       summary: `Selected: ${latest.headline}`
     }, `Selected latest source: ${latest.headline}`);
   }
@@ -158,22 +170,21 @@ async function runTitanStep(job) {
       .filter(image => image.success && image.imageUrl)
       .map(image => image.imageUrl);
     const allUrls = [...(job.data?.imageUrls || []), ...newUrls];
-    const allImages = [...(job.data?.images?.images || []), ...(images.images || [])];
+    const newImageMeta = (images.images || []).map(compactImage);
+    const existingImageMeta = job.data?.imageMeta || (job.data?.images?.images || []).map(compactImage);
+    const allImageMeta = [...existingImageMeta, ...newImageMeta];
 
     if (!newUrls.length) {
       const firstError = images.images?.find(image => image.error)?.error || images.uploadErrors?.[0] || 'No public image URL was created.';
       throw new Error(`Carousel image ${imageIndex + 1} failed: ${firstError}`);
     }
+    const { images: _discardImages, ...safeData } = job.data || {};
 
     return completeStep({
       ...job,
       data: {
-        ...(job.data || {}),
-        images: {
-          images: allImages,
-          successCount: allImages.filter(image => image.success).length,
-          publicUrlCount: allUrls.length
-        },
+        ...safeData,
+        imageMeta: allImageMeta,
         imageUrls: allUrls
       }
     }, `Created carousel image ${imageIndex + 1}. ${allUrls.length} public URL(s) ready.`);

@@ -36,6 +36,32 @@ const TITAN_JOB_STEPS = [
 ];
 const JOB_HISTORY_LIMIT = 25;
 
+function compactImageMeta(image) {
+  return {
+    index: image.index,
+    label: image.label,
+    success: Boolean(image.success),
+    imageUrl: image.imageUrl || '',
+    error: image.error || '',
+    uploadError: image.uploadError || ''
+  };
+}
+
+function compactJobForStorage(job) {
+  const data = job.data || {};
+  const { images: legacyImages, refresh: _discardRefresh, ...safeData } = data;
+  const imageMeta = data.imageMeta || (legacyImages?.images || []).map(compactImageMeta);
+
+  return {
+    ...job,
+    data: {
+      ...safeData,
+      imageUrls: data.imageUrls || [],
+      ...(imageMeta.length ? { imageMeta } : {})
+    }
+  };
+}
+
 function statusLabel(status) {
   if (status === 'active') return 'LIVE';
   if (status === 'building') return 'BUILDING';
@@ -119,7 +145,7 @@ export default function Andy() {
     if (!saved) return;
     try {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) setJobs(parsed.slice(0, JOB_HISTORY_LIMIT));
+      if (Array.isArray(parsed)) setJobs(parsed.slice(0, JOB_HISTORY_LIMIT).map(compactJobForStorage));
     } catch {
       window.localStorage.removeItem('andy_agent_jobs');
     }
@@ -127,7 +153,7 @@ export default function Andy() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('andy_agent_jobs', JSON.stringify(jobs.slice(0, JOB_HISTORY_LIMIT)));
+    window.localStorage.setItem('andy_agent_jobs', JSON.stringify(jobs.slice(0, JOB_HISTORY_LIMIT).map(compactJobForStorage)));
   }, [jobs]);
 
   const speak = useCallback(async (text) => {
@@ -235,7 +261,8 @@ export default function Andy() {
   }
 
   function updateJob(nextJob) {
-    setJobs(prev => prev.map(job => job.id === nextJob.id ? nextJob : job));
+    const compactJob = compactJobForStorage(nextJob);
+    setJobs(prev => prev.map(job => job.id === compactJob.id ? compactJob : job));
   }
 
   function enqueueAgentJob(agentId, cleanCommand) {
