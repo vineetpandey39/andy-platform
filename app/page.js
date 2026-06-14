@@ -45,6 +45,7 @@ export default function Andy() {
   const [voiceStatus, setVoiceStatus] = useState('Voice channel idle. Tap the core or Start voice.');
   const recognitionRef = useRef(null);
   const transcriptRef = useRef('');
+  const finalTranscriptRef = useRef('');
 
   const activeAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'active').length, []);
   const buildingAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'building').length, []);
@@ -143,49 +144,59 @@ export default function Andy() {
   async function startVoice() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setVoiceStatus('Speech recognition is not available. Use Chrome on HTTPS and allow microphone access.');
-      return;
-    }
-
-    try {
-      if (navigator.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(track => track.stop());
-      }
-    } catch {
-      setVoiceStatus('Microphone permission was blocked. Click the lock icon in Chrome and allow microphone.');
+      setVoiceStatus('Browser voice is unavailable. Use Chrome on HTTPS, or type the command.');
       return;
     }
 
     transcriptRef.current = '';
+    finalTranscriptRef.current = '';
     setCommand('');
     const recognition = new SpeechRecognition();
-    recognition.lang = 'en-IN';
-    recognition.continuous = false;
+    recognition.lang = 'en-US';
+    recognition.continuous = true;
     recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
       setListening(true);
-      setVoiceStatus('Listening. Speak your command now.');
+      setVoiceStatus('Listening live. Speak naturally, then tap Stop listening if it does not auto-send.');
     };
 
     recognition.onresult = event => {
-      const transcript = Array.from(event.results).map(result => result[0].transcript).join(' ').trim();
+      let interim = '';
+      let finalText = finalTranscriptRef.current;
+
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const text = event.results[i][0]?.transcript || '';
+        if (event.results[i].isFinal) {
+          finalText = `${finalText} ${text}`.trim();
+        } else {
+          interim = `${interim} ${text}`.trim();
+        }
+      }
+
+      finalTranscriptRef.current = finalText;
+      const transcript = `${finalText} ${interim}`.trim();
       transcriptRef.current = transcript;
       setCommand(transcript);
-      setVoiceStatus(transcript ? `Heard: "${transcript}"` : 'Listening...');
+      setVoiceStatus(transcript ? `Capturing: "${transcript}"` : 'Listening...');
     };
 
     recognition.onerror = event => {
       setListening(false);
-      setVoiceStatus(`Voice error: ${event.error}. Check Chrome microphone permission.`);
+      const help = event.error === 'not-allowed'
+        ? 'Microphone blocked. Click the browser lock icon and allow microphone for this site.'
+        : event.error === 'no-speech'
+          ? 'No speech detected. Try again and speak closer to the mic.'
+          : `Voice error: ${event.error}. Try Chrome on HTTPS.`;
+      setVoiceStatus(help);
     };
 
     recognition.onend = () => {
       setListening(false);
-      const finalTranscript = transcriptRef.current.trim();
+      const finalTranscript = (finalTranscriptRef.current || transcriptRef.current).trim();
       if (finalTranscript) sendCommand(finalTranscript);
-      else setVoiceStatus('No voice captured. Try again closer to the microphone.');
+      else setVoiceStatus('No voice captured. Check Chrome mic permission, then try again.');
     };
 
     recognitionRef.current = recognition;
