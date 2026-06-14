@@ -42,10 +42,11 @@ export default function Andy() {
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState('Voice channel idle. Tap the core or Start voice.');
-  const recognitionRef = useRef(null);
-  const transcriptRef = useRef('');
-  const finalTranscriptRef = useRef('');
+  const [voiceStatus, setVoiceStatus] = useState('OpenAI voice channel idle. Tap the core or Record voice.');
+  const audioChunksRef = useRef([]);
+  const audioRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const streamRef = useRef(null);
 
   const activeAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'active').length, []);
   const buildingAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'building').length, []);
@@ -66,20 +67,44 @@ export default function Andy() {
     check();
   }, []);
 
-  const speak = useCallback((text) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis || !text) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.94;
-    utterance.pitch = 0.82;
-    utterance.volume = 1;
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(voice => /Daniel|Google UK|Microsoft Ryan|Alex/i.test(voice.name));
-    if (preferred) utterance.voice = preferred;
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utterance);
+  const speak = useCallback(async (text) => {
+    const clean = String(text || '').trim();
+    if (!clean || typeof window === 'undefined') return;
+
+    try {
+      audioRef.current?.pause();
+      setSpeaking(true);
+      setVoiceStatus('ANDY is speaking through OpenAI voice...');
+      const res = await fetch('/api/voice/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: clean })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'OpenAI voice playback failed.');
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setSpeaking(false);
+        setVoiceStatus('OpenAI voice channel idle. Tap the core or Record voice.');
+        URL.revokeObjectURL(url);
+      };
+      audio.onerror = () => {
+        setSpeaking(false);
+        setVoiceStatus('Voice playback failed. The text reply is still ready.');
+        URL.revokeObjectURL(url);
+      };
+      await audio.play();
+    } catch (error) {
+      setSpeaking(false);
+      setVoiceStatus(error.message || 'Voice playback failed. The text reply is still ready.');
+    }
   }, []);
 
   async function authenticate(event) {
@@ -124,7 +149,7 @@ export default function Andy() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Command failed');
       setReply(data.reply);
-      speak(data.reply);
+      await speak(data.reply);
 
       const match = AGENTS.find(agent => clean.toLowerCase().includes(agent.name.toLowerCase()) || clean.toLowerCase().includes(agent.id));
       if (match) {
@@ -134,78 +159,89 @@ export default function Andy() {
     } catch (error) {
       const message = error.message || 'Command failed.';
       setReply(message);
-      speak(message);
+      await speak(message);
     } finally {
       setLoading(false);
-      setVoiceStatus('Voice channel idle. Tap the core or Start voice.');
     }
   }
 
   async function startVoice() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setVoiceStatus('Browser voice is unavailable. Use Chrome on HTTPS, or type the command.');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceStatus('Mic recording is unavailable in this browser. Use Chrome on HTTPS, or type the command.');
       return;
     }
 
-    transcriptRef.current = '';
-    finalTranscriptRef.current = '';
-    setCommand('');
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+    try {
+      audioRef.current?.pause();
+      setSpeaking(false);
+      setCommand('');
+      audioChunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? { mimeType: 'audio/webm;codecs=opus' }
+        : {};
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
 
-    recognition.onstart = () => {
-      setListening(true);
-      setVoiceStatus('Listening live. Speak naturally, then tap Stop listening if it does not auto-send.');
-    };
+      recorder.ondataavailable = event => {
+        if (event.data?.size) audioChunksRef.current.push(event.data);
+      };
 
-    recognition.onresult = event => {
-      let interim = '';
-      let finalText = finalTranscriptRef.current;
-
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const text = event.results[i][0]?.transcript || '';
-        if (event.results[i].isFinal) {
-          finalText = `${finalText} ${text}`.trim();
-        } else {
-          interim = `${interim} ${text}`.trim();
+      recorder.onstop = async () => {
+        setListening(false);
+        stream.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        audioChunksRef.current = [];
+        if (!blob.size) {
+          setVoiceStatus('No audio captured. Check microphone permission and try again.');
+          return;
         }
-      }
+        await transcribeAndSend(blob);
+      };
 
-      finalTranscriptRef.current = finalText;
-      const transcript = `${finalText} ${interim}`.trim();
-      transcriptRef.current = transcript;
-      setCommand(transcript);
-      setVoiceStatus(transcript ? `Capturing: "${transcript}"` : 'Listening...');
-    };
-
-    recognition.onerror = event => {
+      recorder.start();
+      setListening(true);
+      setVoiceStatus('Recording through OpenAI voice. Speak naturally, then tap Stop and transcribe.');
+    } catch (error) {
       setListening(false);
-      const help = event.error === 'not-allowed'
+      const blocked = error.name === 'NotAllowedError' || error.name === 'SecurityError';
+      setVoiceStatus(blocked
         ? 'Microphone blocked. Click the browser lock icon and allow microphone for this site.'
-        : event.error === 'no-speech'
-          ? 'No speech detected. Try again and speak closer to the mic.'
-          : `Voice error: ${event.error}. Try Chrome on HTTPS.`;
-      setVoiceStatus(help);
-    };
-
-    recognition.onend = () => {
-      setListening(false);
-      const finalTranscript = (finalTranscriptRef.current || transcriptRef.current).trim();
-      if (finalTranscript) sendCommand(finalTranscript);
-      else setVoiceStatus('No voice captured. Check Chrome mic permission, then try again.');
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
+        : error.message || 'Could not start microphone recording.');
+    }
   }
 
   function stopVoice() {
-    recognitionRef.current?.stop();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      setVoiceStatus('Stopping recording. Sending audio to OpenAI...');
+      recorder.stop();
+      return;
+    }
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
     setListening(false);
+  }
+
+  async function transcribeAndSend(blob) {
+    try {
+      setVoiceStatus('OpenAI is transcribing your command...');
+      const form = new FormData();
+      form.append('audio', blob, 'andy-command.webm');
+      const res = await fetch('/api/voice/transcribe', {
+        method: 'POST',
+        body: form
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'OpenAI transcription failed.');
+      setCommand(data.text);
+      setVoiceStatus(`Captured: "${data.text}"`);
+      await sendCommand(data.text);
+    } catch (error) {
+      setVoiceStatus(error.message || 'OpenAI transcription failed. Type the command and try again.');
+    }
   }
 
   if (checkingSession) {
@@ -278,11 +314,11 @@ export default function Andy() {
                 {AGENTS.map((agent, index) => (
                   <div className="ray" key={`ray-${agent.id}`} style={{ transform: `rotate(${-90 + (360 / AGENTS.length) * index}deg)` }} />
                 ))}
-                <button className={`andy-core ${listening ? 'listening' : ''}`} onClick={listening ? stopVoice : startVoice} aria-label="Start voice command">
+                <button className={`andy-core ${listening ? 'listening' : ''}`} onClick={listening ? stopVoice : startVoice} aria-label="Record voice command">
                   <span className="core-face" />
                 </button>
                 <button className="voice-btn" onClick={listening ? stopVoice : startVoice}>
-                  {listening ? 'Stop listening' : speaking ? 'ANDY speaking' : 'Start voice'}
+                  {listening ? 'Stop and transcribe' : speaking ? 'ANDY speaking' : 'Record voice'}
                 </button>
                 {AGENTS.map((agent, index) => (
                   <button
