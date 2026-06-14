@@ -5,6 +5,7 @@ import { publicAgents } from './lib/agents';
 
 const AGENTS = publicAgents();
 const QUICK_COMMANDS = [
+  'Activate Titan and publish the next PostForge carousel',
   'Pull Titan on screen and show next action',
   'Give me an agent status report',
   'What should Zeus escalate today?',
@@ -12,6 +13,15 @@ const QUICK_COMMANDS = [
   'Show revenue command summary',
   'Which agent should I activate next?'
 ];
+
+const TITAN_PILLAR_SEQUENCE = ['news', 'tool', 'income', 'transformation', 'automation'];
+const TITAN_PILLAR_LABELS = {
+  news: 'AI News Breakdown',
+  tool: 'AI Tool Drop',
+  income: 'AI Income Update',
+  transformation: 'AI Transformation',
+  automation: 'AI Automation Win'
+};
 
 function statusLabel(status) {
   if (status === 'active') return 'LIVE';
@@ -40,6 +50,7 @@ export default function Andy() {
   const [command, setCommand] = useState('');
   const [reply, setReply] = useState('Authenticate and I will bring the agent network online.');
   const [loading, setLoading] = useState(false);
+  const [agentRunning, setAgentRunning] = useState('');
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState('OpenAI voice channel idle. Tap the core or Record voice.');
@@ -50,6 +61,23 @@ export default function Andy() {
 
   const activeAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'active').length, []);
   const buildingAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'building').length, []);
+
+  function isTitanAutomationCommand(text) {
+    const clean = String(text || '').toLowerCase();
+    return /\btitan\b/.test(clean) && /\b(activate|run|start|publish|post|execute|launch|carousel|postforge)\b/.test(clean);
+  }
+
+  function nextTitanPillar() {
+    if (typeof window === 'undefined') return TITAN_PILLAR_SEQUENCE[0];
+    const index = Number(window.localStorage.getItem('andy_titan_pillar_index') || '0');
+    return TITAN_PILLAR_SEQUENCE[index % TITAN_PILLAR_SEQUENCE.length];
+  }
+
+  function advanceTitanPillar() {
+    if (typeof window === 'undefined') return;
+    const index = Number(window.localStorage.getItem('andy_titan_pillar_index') || '0');
+    window.localStorage.setItem('andy_titan_pillar_index', String((index + 1) % TITAN_PILLAR_SEQUENCE.length));
+  }
 
   useEffect(() => {
     async function check() {
@@ -141,6 +169,11 @@ export default function Andy() {
     setReply('Routing command through ANDY core...');
 
     try {
+      if (isTitanAutomationCommand(clean)) {
+        await runTitan(clean);
+        return;
+      }
+
       const res = await fetch('/api/andy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -162,6 +195,45 @@ export default function Andy() {
       await speak(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runTitan(cleanCommand) {
+    const titan = AGENTS.find(agent => agent.id === 'titan');
+    const pillar = nextTitanPillar();
+    setSelectedAgent(titan || AGENTS[0]);
+    setActiveTab('command');
+    setAgentRunning('titan');
+    setReply(`Titan is live, Vineet. Running ${TITAN_PILLAR_LABELS[pillar]} in PostForge: refresh, pick latest verified source, generate plan, create images, and publish to Instagram.`);
+    setVoiceStatus(`Titan running ${TITAN_PILLAR_LABELS[pillar]} through PostForge...`);
+
+    try {
+      const res = await fetch('/api/agents/titan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cleanCommand, pillar, format: 'Carousel' })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Titan failed.');
+
+      advanceTitanPillar();
+      const nextPillar = nextTitanPillar();
+      const message = [
+        `Titan completed ${data.pillar?.full || TITAN_PILLAR_LABELS[pillar]}.`,
+        `Source: ${data.source?.headline || 'latest verified item'}.`,
+        data.instagram?.permalink ? `Published: ${data.instagram.permalink}` : `Published media ID: ${data.instagram?.id || 'created'}.`,
+        `Next Titan run will use ${TITAN_PILLAR_LABELS[nextPillar]}.`
+      ].join(' ');
+      setReply(message);
+      await speak(message);
+    } catch (error) {
+      const message = `Titan stopped: ${error.message || 'automation failed'}`;
+      setReply(message);
+      await speak(message);
+    } finally {
+      setAgentRunning('');
+      setLoading(false);
+      setVoiceStatus('OpenAI voice channel idle. Tap the core or Record voice.');
     }
   }
 
@@ -367,7 +439,7 @@ export default function Andy() {
                     {selectedAgent.tasks.map(task => (
                       <div key={task}>
                         <span>{task}</span>
-                        <strong>{selectedAgent.status === 'active' ? 'RUNNING' : 'READY'}</strong>
+                        <strong>{agentRunning === selectedAgent.id ? 'EXECUTING' : selectedAgent.status === 'active' ? 'RUNNING' : 'READY'}</strong>
                       </div>
                     ))}
                   </div>

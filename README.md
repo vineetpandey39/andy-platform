@@ -34,11 +34,16 @@ OPENAI_TTS_VOICE=onyx
 ANDY_CODEWORD=andy activate
 ANDY_SESSION_SECRET=use_a_long_random_secret
 ANDY_WEBHOOK_SECRET=use_a_long_random_secret
+POSTFORGE_URL=https://postforge-ai-one.vercel.app
 ```
 
 ## Voice Input
 
 Voice commands use browser microphone recording plus server-side OpenAI transcription and OpenAI TTS. Use Chrome on HTTPS, allow microphone permission from the browser address bar, then click **Record voice**, speak, and click **Stop and transcribe**.
+
+## Titan Automation
+
+Commands such as `activate Titan`, `run Titan`, or `post with Titan` trigger the PostForge workflow from ANDY. Titan rotates through News, Tools, Income, Transform, and Automation, then calls PostForge to refresh verified sources, select the latest item, generate a carousel plan, create carousel images, and publish to Instagram.
 
 ## Webhook
 
