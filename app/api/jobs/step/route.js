@@ -1,6 +1,6 @@
 import { isAuthed } from '../../../lib/session';
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const PILLARS = [
   { id: 'news', full: 'AI News Breakdown' },
@@ -14,7 +14,12 @@ const TITAN_STEPS = [
   { id: 'refresh', label: 'Refresh verified PostForge sources' },
   { id: 'select', label: 'Select latest verified source' },
   { id: 'generate', label: 'Generate creation plan' },
-  { id: 'images', label: 'Create carousel images' },
+  { id: 'image-0', label: 'Create carousel image 1' },
+  { id: 'image-1', label: 'Create carousel image 2' },
+  { id: 'image-2', label: 'Create carousel image 3' },
+  { id: 'image-3', label: 'Create carousel image 4' },
+  { id: 'image-4', label: 'Create carousel image 5' },
+  { id: 'image-5', label: 'Create carousel image 6' },
   { id: 'publish', label: 'Publish to Instagram' }
 ];
 
@@ -28,7 +33,13 @@ async function postJson(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { error: text.slice(0, 280) || `PostForge ${path} returned non-JSON.` };
+  }
   if (!res.ok || data.error) {
     throw new Error(data.error || `PostForge ${path} failed with ${res.status}`);
   }
@@ -125,7 +136,8 @@ async function runTitanStep(job) {
     }, `Generated plan: ${generated.hook || 'creation plan ready'}`);
   }
 
-  if (step.id === 'images') {
+  if (step.id.startsWith('image-')) {
+    const imageIndex = Number(step.id.replace('image-', ''));
     const generated = job.data?.generated || {};
     const images = await postJson('/api/carousel-images', {
       hook: generated.hook,
@@ -133,21 +145,33 @@ async function runTitanStep(job) {
       cover_subtext: generated.cover_subtext,
       cover_visual_prompt: generated.cover_visual_prompt,
       slides: generated.slides,
-      pillarId: activePillar.id
+      pillarId: activePillar.id,
+      onlyIndex: imageIndex
     });
 
-    const imageUrls = (images.images || [])
+    const newUrls = (images.images || [])
       .filter(image => image.success && image.imageUrl)
       .map(image => image.imageUrl);
+    const allUrls = [...(job.data?.imageUrls || []), ...newUrls];
+    const allImages = [...(job.data?.images?.images || []), ...(images.images || [])];
 
-    if (imageUrls.length < 2) {
-      throw new Error(`Images were created, but Instagram posting needs at least 2 public Blob URLs. PostForge returned ${imageUrls.length}.`);
+    if (!newUrls.length) {
+      const firstError = images.images?.find(image => image.error)?.error || images.uploadErrors?.[0] || 'No public image URL was created.';
+      throw new Error(`Carousel image ${imageIndex + 1} failed: ${firstError}`);
     }
 
     return completeStep({
       ...job,
-      data: { ...(job.data || {}), images, imageUrls }
-    }, `Created ${imageUrls.length} Instagram-ready carousel image URL(s).`);
+      data: {
+        ...(job.data || {}),
+        images: {
+          images: allImages,
+          successCount: allImages.filter(image => image.success).length,
+          publicUrlCount: allUrls.length
+        },
+        imageUrls: allUrls
+      }
+    }, `Created carousel image ${imageIndex + 1}. ${allUrls.length} public URL(s) ready.`);
   }
 
   if (step.id === 'publish') {

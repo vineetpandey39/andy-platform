@@ -26,7 +26,12 @@ const TITAN_JOB_STEPS = [
   { id: 'refresh', label: 'Refresh sources' },
   { id: 'select', label: 'Select latest' },
   { id: 'generate', label: 'Generate plan' },
-  { id: 'images', label: 'Create images' },
+  { id: 'image-0', label: 'Create image 1' },
+  { id: 'image-1', label: 'Create image 2' },
+  { id: 'image-2', label: 'Create image 3' },
+  { id: 'image-3', label: 'Create image 4' },
+  { id: 'image-4', label: 'Create image 5' },
+  { id: 'image-5', label: 'Create image 6' },
   { id: 'publish', label: 'Publish' }
 ];
 
@@ -276,7 +281,13 @@ export default function Andy() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ job: currentJob })
         });
-        const data = await res.json();
+        const text = await res.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch {
+          throw new Error(text.slice(0, 260) || 'Job step returned non-JSON.');
+        }
         if (!res.ok || data.error) throw new Error(data.error || 'Job step failed.');
         currentJob = data.job;
         updateJob(currentJob);
