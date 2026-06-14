@@ -34,6 +34,7 @@ const TITAN_JOB_STEPS = [
   { id: 'image-5', label: 'Create image 6' },
   { id: 'publish', label: 'Publish' }
 ];
+const JOB_HISTORY_LIMIT = 25;
 
 function statusLabel(status) {
   if (status === 'active') return 'LIVE';
@@ -75,6 +76,9 @@ export default function Andy() {
   const buildingAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'building').length, []);
   const runningJob = useMemo(() => jobs.find(job => job.status === 'running' || job.status === 'queued'), [jobs]);
   const runningAgentId = runningJob?.agentId || '';
+  const activeJobCount = useMemo(() => jobs.filter(job => job.status === 'running' || job.status === 'queued').length, [jobs]);
+  const completedJobCount = useMemo(() => jobs.filter(job => job.status === 'completed').length, [jobs]);
+  const failedJobCount = useMemo(() => jobs.filter(job => job.status === 'failed').length, [jobs]);
 
   function isTitanAutomationCommand(text) {
     const clean = String(text || '').toLowerCase();
@@ -115,7 +119,7 @@ export default function Andy() {
     if (!saved) return;
     try {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) setJobs(parsed.slice(0, 8));
+      if (Array.isArray(parsed)) setJobs(parsed.slice(0, JOB_HISTORY_LIMIT));
     } catch {
       window.localStorage.removeItem('andy_agent_jobs');
     }
@@ -123,7 +127,7 @@ export default function Andy() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('andy_agent_jobs', JSON.stringify(jobs.slice(0, 8)));
+    window.localStorage.setItem('andy_agent_jobs', JSON.stringify(jobs.slice(0, JOB_HISTORY_LIMIT)));
   }, [jobs]);
 
   const speak = useCallback(async (text) => {
@@ -260,7 +264,7 @@ export default function Andy() {
       updatedAt: new Date().toISOString()
     };
 
-    setJobs(prev => [job, ...prev].slice(0, 8));
+    setJobs(prev => [job, ...prev].slice(0, JOB_HISTORY_LIMIT));
     setSelectedAgent(agent);
     setActiveTab('command');
     setReply(`${agent.name} job queued, Vineet. I will execute it step-by-step and keep the queue status visible.`);
@@ -332,6 +336,10 @@ export default function Andy() {
 
   function clearCompletedJobs() {
     setJobs(prev => prev.filter(job => job.status === 'running' || job.status === 'queued'));
+  }
+
+  function clearAllJobs() {
+    setJobs([]);
   }
 
   async function startVoice() {
@@ -549,30 +557,59 @@ export default function Andy() {
                   <div>
                     <div className="panel-label">Agent queue</div>
                     <strong>{jobs.length ? `${jobs.length} job${jobs.length === 1 ? '' : 's'}` : 'No jobs queued'}</strong>
+                    {!!jobs.length && (
+                      <span className="queue-counts">{activeJobCount} active / {completedJobCount} done / {failedJobCount} failed</span>
+                    )}
                   </div>
-                  {jobs.some(job => job.status === 'completed' || job.status === 'failed') && (
-                    <button className="ghost-btn compact" onClick={clearCompletedJobs}>Clear done</button>
-                  )}
+                  <div className="queue-actions">
+                    {jobs.some(job => job.status === 'completed' || job.status === 'failed') && (
+                      <button className="ghost-btn compact" onClick={clearCompletedJobs}>Clear done</button>
+                    )}
+                    {!!jobs.length && <button className="ghost-btn compact" onClick={clearAllJobs}>Clear all</button>}
+                  </div>
                 </div>
                 <div className="queue-list">
                   {jobs.length === 0 && <p className="muted">Say “activate Titan” to create the first autonomous job.</p>}
                   {jobs.map(job => {
                     const step = job.steps?.[job.currentStep]?.label || (job.status === 'completed' ? 'Complete' : 'Waiting');
+                    const publishProof = Boolean(job.result?.permalink || job.result?.mediaId);
+                    const completedWithoutProof = job.status === 'completed' && job.agentId === 'titan' && !publishProof;
+                    const jobClass = completedWithoutProof ? 'completed warning' : job.status;
                     return (
-                      <article className={`queue-job ${job.status}`} key={job.id}>
+                      <article className={`queue-job ${jobClass}`} key={job.id}>
                         <div className="queue-job-top">
                           <strong>{job.agentName}</strong>
-                          <span>{job.status}</span>
+                          <span>{completedWithoutProof ? 'NO PUBLISH PROOF' : job.status}</span>
                         </div>
                         <p>{job.pillarFull || job.command}</p>
                         <div className="progress-track">
                           <span style={{ width: `${job.progress || 0}%` }} />
                         </div>
-                        <small>{job.status === 'completed' ? 'Completed' : job.status === 'failed' ? job.error : step}</small>
-                        {job.log?.slice(-3).map(entry => (
+                        <small>
+                          {completedWithoutProof
+                            ? 'Completed locally, but no Instagram media ID/permalink was returned. Clear and rerun this job.'
+                            : job.status === 'completed'
+                              ? 'Published step completed'
+                              : job.status === 'failed' ? job.error : step}
+                        </small>
+                        {job.log?.slice(-6).map(entry => (
                           <em key={`${job.id}-${entry.at}`}>{entry.message}</em>
                         ))}
                         {job.result?.permalink && <a href={job.result.permalink} target="_blank" rel="noreferrer">Open post</a>}
+                        {job.result?.mediaId && <em>Instagram media ID: {job.result.mediaId}</em>}
+                        {(job.log?.length > 6 || job.result?.source || job.result?.hook) && (
+                          <details className="job-history">
+                            <summary>View full history</summary>
+                            {job.result?.source?.headline && <p>Source: {job.result.source.headline}</p>}
+                            {job.result?.hook && <p>Hook: {job.result.hook}</p>}
+                            {job.log?.map(entry => (
+                              <div key={`${job.id}-full-${entry.at}`}>
+                                <time>{new Date(entry.at).toLocaleTimeString()}</time>
+                                <span>{entry.message}</span>
+                              </div>
+                            ))}
+                          </details>
+                        )}
                       </article>
                     );
                   })}

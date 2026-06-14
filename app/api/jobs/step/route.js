@@ -91,6 +91,11 @@ function failJob(job, error) {
   }, `Failed: ${error.message || 'Job failed.'}`);
 }
 
+function canonicalSteps(job) {
+  if (job.agentId === 'titan') return TITAN_STEPS;
+  return Array.isArray(job.steps) ? job.steps : [];
+}
+
 async function runTitanStep(job) {
   const activePillar = normalizePillar(job.pillar);
   const step = TITAN_STEPS[Number(job.currentStep || 0)];
@@ -219,7 +224,7 @@ export async function POST(request) {
       ...incomingJob,
       status: 'running',
       updatedAt: nowIso(),
-      steps: incomingJob.steps?.length ? incomingJob.steps : TITAN_STEPS
+      steps: canonicalSteps(incomingJob)
     };
 
     if (runningJob.agentId === 'titan') {
