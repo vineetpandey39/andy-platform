@@ -93,10 +93,13 @@ export default function Andy() {
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState('OpenAI voice channel idle. Tap the core or Record voice.');
+  const [booting, setBooting] = useState(false);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
+  const recordTimerRef = useRef(null);
+  const bootTimerRef = useRef(null);
 
   const activeAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'active').length, []);
   const buildingAgents = useMemo(() => AGENTS.filter(agent => agent.status === 'building').length, []);
@@ -129,7 +132,11 @@ export default function Andy() {
         const res = await fetch('/api/auth');
         const data = await res.json();
         setUnlocked(Boolean(data.authenticated));
-        if (data.authenticated) setReply('Welcome back, Vineet. ANDY command core is online.');
+        if (data.authenticated) {
+          setBooting(true);
+          setReply('Welcome back, Vineet. ANDY command core is online.');
+          bootTimerRef.current = window.setTimeout(() => setBooting(false), 2800);
+        }
       } catch {
         setUnlocked(false);
       } finally {
@@ -137,6 +144,14 @@ export default function Andy() {
       }
     }
     check();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(recordTimerRef.current);
+      window.clearTimeout(bootTimerRef.current);
+      streamRef.current?.getTracks().forEach(track => track.stop());
+    };
   }, []);
 
   useEffect(() => {
@@ -210,9 +225,50 @@ export default function Andy() {
       setUnlocked(true);
       setReply('ANDY online. Agent orbit stabilized. Awaiting your command, Vineet.');
       setCodeword('');
+      startWakeSequence(true);
     } catch (error) {
       setAuthError(error.message);
     }
+  }
+
+  function playWakeTone() {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const context = new AudioContext();
+      const master = context.createGain();
+      master.gain.setValueAtTime(0.0001, context.currentTime);
+      master.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.18);
+      master.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 2.9);
+      master.connect(context.destination);
+
+      [110, 164.81, 220, 329.63, 440].forEach((frequency, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = index < 2 ? 'sawtooth' : 'sine';
+        oscillator.frequency.setValueAtTime(frequency, context.currentTime + index * 0.22);
+        gain.gain.setValueAtTime(0.0001, context.currentTime + index * 0.22);
+        gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + index * 0.22 + 0.06);
+        gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 2.2 + index * 0.08);
+        oscillator.connect(gain);
+        gain.connect(master);
+        oscillator.start(context.currentTime + index * 0.22);
+        oscillator.stop(context.currentTime + 3);
+      });
+    } catch {
+      // Audio boot is decorative; command flow should continue even if the browser blocks it.
+    }
+  }
+
+  function startWakeSequence(withAudio = false) {
+    window.clearTimeout(bootTimerRef.current);
+    setBooting(true);
+    setVoiceStatus('ANDY core waking. Neural rails charging...');
+    if (withAudio) playWakeTone();
+    bootTimerRef.current = window.setTimeout(() => {
+      setBooting(false);
+      setVoiceStatus('ANDY is awake. Speak naturally, then I will route the command.');
+    }, 3200);
   }
 
   async function lock() {
@@ -370,6 +426,11 @@ export default function Andy() {
   }
 
   async function startVoice() {
+    if (listening) {
+      stopVoice();
+      return;
+    }
+
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setVoiceStatus('Mic recording is unavailable in this browser. Use Chrome on HTTPS, or type the command.');
       return;
@@ -405,9 +466,13 @@ export default function Andy() {
         await transcribeAndSend(blob);
       };
 
-      recorder.start();
+      recorder.start(250);
       setListening(true);
-      setVoiceStatus('Recording through OpenAI voice. Speak naturally, then tap Stop and transcribe.');
+      setVoiceStatus('Listening for 6 seconds. Speak now, or tap Stop to send early.');
+      window.clearTimeout(recordTimerRef.current);
+      recordTimerRef.current = window.setTimeout(() => {
+        if (mediaRecorderRef.current?.state === 'recording') stopVoice();
+      }, 6000);
     } catch (error) {
       setListening(false);
       const blocked = error.name === 'NotAllowedError' || error.name === 'SecurityError';
@@ -418,9 +483,13 @@ export default function Andy() {
   }
 
   function stopVoice() {
+    window.clearTimeout(recordTimerRef.current);
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
       setVoiceStatus('Stopping recording. Sending audio to OpenAI...');
+      try {
+        recorder.requestData();
+      } catch {}
       recorder.stop();
       return;
     }
@@ -463,10 +532,11 @@ export default function Andy() {
   if (!unlocked) {
     return (
       <main className="shell lock-screen">
-        <section className="lock-card">
+        <section className={`lock-card ${booting ? 'booting' : ''}`}>
           <div className="andy-head" />
           <h1>ANDY</h1>
-          <p className="muted">Autonomous Neural Director for You. Enter the command codeword to bring the agent network online.</p>
+          <p className="boot-kicker">JARVIS MODE / PRIVATE COMMAND CORE</p>
+          <p className="muted">Autonomous Neural Director for You. Enter the command codeword to wake the agent network.</p>
           <form className="code-form" onSubmit={authenticate}>
             <input
               type="password"
@@ -506,7 +576,7 @@ export default function Andy() {
       <div className="cockpit">
         {activeTab === 'command' && (
           <section className="command-grid">
-            <div className="holo-stage">
+              <div className={`holo-stage ${booting ? 'booting' : ''}`}>
               <div className="command-title">
                 <p className="panel-label">Autonomous command cockpit</p>
                 <h1>ANDY</h1>
@@ -518,11 +588,11 @@ export default function Andy() {
                 {AGENTS.map((agent, index) => (
                   <div className="ray" key={`ray-${agent.id}`} style={{ transform: `rotate(${-90 + (360 / AGENTS.length) * index}deg)` }} />
                 ))}
-                <button className={`andy-core ${listening ? 'listening' : ''}`} onClick={listening ? stopVoice : startVoice} aria-label="Record voice command">
+                <button className={`andy-core ${listening ? 'listening' : ''} ${speaking ? 'speaking' : ''} ${booting ? 'booting' : ''}`} onClick={listening ? stopVoice : startVoice} aria-label="Record voice command">
                   <span className="core-face" />
                 </button>
                 <button className="voice-btn" onClick={listening ? stopVoice : startVoice}>
-                  {listening ? 'Stop and transcribe' : speaking ? 'ANDY speaking' : 'Record voice'}
+                  {listening ? 'Listening... tap to send' : speaking ? 'ANDY speaking' : 'Record voice'}
                 </button>
                 {AGENTS.map((agent, index) => (
                   <button

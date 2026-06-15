@@ -22,7 +22,8 @@ export async function POST(request) {
     const body = new FormData();
     body.append('file', audio, audio.name || 'andy-command.webm');
     body.append('model', process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe');
-    body.append('language', 'en');
+    body.append('response_format', 'json');
+    body.append('prompt', 'The speaker is giving commands to ANDY, a Jarvis-style AI assistant. Common words include ANDY, Jarvis, Titan, PostForge, carousel, Instagram, agent, activate, publish, news, tools, income, transform, automation.');
 
     const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
