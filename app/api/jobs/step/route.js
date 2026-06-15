@@ -28,9 +28,14 @@ function postforgeBase() {
 }
 
 async function postJson(path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (process.env.POSTFORGE_API_SECRET) {
+    headers['x-postforge-secret'] = process.env.POSTFORGE_API_SECRET;
+  }
+
   const res = await fetch(`${postforgeBase()}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body)
   });
   const text = await res.text();
